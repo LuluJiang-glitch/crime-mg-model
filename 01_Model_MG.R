@@ -15,7 +15,7 @@ source("~/Desktop/Crime/code_final/metric_graph.R")
 source(file.path(code_dir, "Function_Model.R"))
 
 Region <- "City"
-crime_type <- "Theft from the person"
+crime_type <- "Bicycle theft"
 # "Theft from the person", "Robbery", "Drugs", "Bicycle theft"
 # "Anti-social behaviour", "Criminal damage and arson", "Violence and sexual offences", "Vehicle crime"
 # "Burglary", "Shoplifting"
@@ -32,10 +32,6 @@ boundary <- st_transform(
   st_union()
 boundary_sf <- st_as_sf(boundary)
 crs <- sf::st_crs(boundary_sf)
-
-# ==============================================================================
-# ============================ Process crime data ===============================
-# ==============================================================================
 
 data_all_raw <- yearly_data %>%
   filter(`Crime type` == crime_type) %>%
