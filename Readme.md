@@ -8,7 +8,7 @@ This repository contains the R code used to analyse street-level crime data in t
 | `00_Pre.R`           | Prepares annual UK crime data and constructs the City of London street network from OpenStreetMap.                                                             |
 | `01_Model_MG.R`      | Fits the metric-graph aggregated model.                                                                                                                        |
 | `01_Model_Spatial.R` | Fits the planar spatial aggregated model.                                                                                                                      |
-| `01_Model_Point_.R`  | Fits the planar point-referenced model.                                                                                                                        |
+| `01_Model_Point_.R`  | Fits the planar point model.                                                                                                                        |
 | `02_plot.R`          | Reads the fitted models and produces comparison figures and summaries.                                                                                         |
 | `Function_Model.R`   | Contains supporting functions used for data preparation, graph operations, covariate extraction, distance calculation, and numerical integration.              |
 
