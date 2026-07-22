@@ -15,7 +15,8 @@ source("~/Desktop/Crime/code_final/metric_graph.R")
 source(file.path(code_dir, "Function_Model.R"))
 
 Region <- "City"
-crime_type <- "Bicycle theft"
+crime_type <- "Robbery"
+model_years <- 2023:2025
 # "Theft from the person", "Robbery", "Drugs", "Bicycle theft"
 # "Anti-social behaviour", "Criminal damage and arson", "Violence and sexual offences", "Vehicle crime"
 # "Burglary", "Shoplifting"
@@ -33,9 +34,10 @@ boundary <- st_transform(
 boundary_sf <- st_as_sf(boundary)
 crs <- sf::st_crs(boundary_sf)
 
+# Longitude Latitude  Year crime
 data_all_raw <- yearly_data %>%
   filter(`Crime type` == crime_type) %>%
-  filter(Year %in% c("2023", "2024", "2025")) %>%
+  filter(Year %in% as.character(model_years)) %>%
   st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326) %>%
   filter(rowSums(st_within(geometry, boundary, sparse = FALSE)) > 0) %>%
   mutate(
@@ -47,11 +49,13 @@ data_all_raw <- yearly_data %>%
   summarise(crime = sum(count), .groups = "drop") %>%
   st_drop_geometry()
 
+# Longitude Latitude original_loc_id
 loc_data_all_original <- data_all_raw %>%
   distinct(Longitude, Latitude) %>%
   arrange(Longitude, Latitude) %>%
   mutate(original_loc_id = row_number())
 
+# merge close points
 merge_res <- merge_points_within_distance(
   loc_df = loc_data_all_original %>%
     select(Longitude, Latitude),
@@ -70,6 +74,8 @@ message(
   " meters."
 )
 
+
+# original_loc_id Longitude_original Latitude_original loc_id Longitude Latitude
 loc_cluster_map <- loc_data_all_original %>%
   select(
     original_loc_id,
@@ -87,6 +93,7 @@ loc_cluster_map <- loc_data_all_original %>%
     by = "original_loc_id"
   )
 
+# Longitude Latitude loc_id n_original_points
 loc_data_all_df <- merge_res$loc_merged_df %>%
   select(
     Longitude,
@@ -95,8 +102,11 @@ loc_data_all_df <- merge_res$loc_merged_df %>%
     n_original_points
   ) %>%
   arrange(loc_id)
+
+# Longitude Latitude (merged)
 loc_data_all <- loc_data_all_df %>% select(Longitude, Latitude)
 
+# loc_id Longitude Latitude  Year crime
 data_all <- data_all_raw %>%
   left_join(
     loc_data_all_original,
@@ -124,14 +134,12 @@ data_all <- data_all_raw %>%
   ) %>%
   arrange(loc_id, Year)
 
-data <- data_all %>%
-  filter(Year %in% 2023:2025)
-
-loc_data <- data %>%
-  select(Longitude, Latitude)
-
+data <- data_all %>% filter(Year %in% model_years)
+loc_data <- data %>% select(Longitude, Latitude)
 loc_data_df <- as.data.frame(loc_data)
 colnames(loc_data_df) <- c("Longitude", "Latitude")
+
+
 
 
 load("~/Desktop/Crime/code_final/RData/Prepare/02_graph_City.RData")
@@ -164,8 +172,8 @@ edge_MG <- sf::st_transform(
 )
 
 
+# intersection points
 intsec_file <- file.path(prepare_dir, paste0("03_intsec_", Region, "_", crime_type, ".RData"))
-
 if (file.exists(intsec_file)) {
   load(intsec_file)
   message("Loaded existing intsec_pts: ", intsec_file)
@@ -199,6 +207,7 @@ graph$add_observations(
 graph$observation_to_vertex(mesh_warning = TRUE)
 
 
+
 edge_graph_01 <- graph$get_edges(format = "sf")
 
 mid_points <- t(
@@ -220,14 +229,14 @@ nn_edges <- FNN::get.knnx(
   k = 1
 )
 
-edge_graph_01$loc_id <- nn_edges$nn.index[, 1]
-edge_graph_01$Longitude <- loc_data_all_df$Longitude[edge_graph_01$loc_id]
-edge_graph_01$Latitude <- loc_data_all_df$Latitude[edge_graph_01$loc_id]
+edge_graph_01$loc_id <- loc_data_all_df$loc_id[nn_edges$nn.index[, 1]]
+edge_graph_01$Longitude <- loc_data_all_df$Longitude[nn_edges$nn.index[, 1]]
+edge_graph_01$Latitude <- loc_data_all_df$Latitude[nn_edges$nn.index[, 1]]
 
 used_loc_ids <- sort(unique(edge_graph_01$loc_id))
 all_loc_ids <- loc_data_all_df$loc_id
 unused_loc_ids <- setdiff(all_loc_ids, used_loc_ids)
-
+# unused_loc_ids=0
 if (length(unused_loc_ids) == 0) {
   message("All merged coordinate points are already used by graph edges; no reassignment is needed.")
   transfer_map <- integer(0)
@@ -254,53 +263,43 @@ if (length(unused_loc_ids) == 0) {
   message("Created a mapping from unused merged coordinates to the nearest used merged coordinates.")
 }
 
-loc_data_all_map <- loc_data_all_df %>%
-  distinct(Longitude, Latitude, loc_id)
+loc_data_all_map <- loc_data_all_df %>% distinct(Longitude, Latitude, loc_id)
 
 
-if (!("loc_id" %in% names(data_all))) {
-  data_all <- data_all %>%
-    left_join(loc_data_all_map, by = c("Longitude", "Latitude"))
-}
+# if (!("loc_id" %in% names(data_all))) {
+#   data_all <- data_all %>%
+#     left_join(loc_data_all_map, by = c("Longitude", "Latitude"))
+# }
+# 
+# if (!("loc_id" %in% names(data))) {
+#   data <- data %>%
+#     left_join(loc_data_all_map, by = c("Longitude", "Latitude"))
+# }
 
-if (!("loc_id" %in% names(data))) {
-  data <- data %>%
-    left_join(loc_data_all_map, by = c("Longitude", "Latitude"))
-}
 
 
+# loc_id_final  Year crime
 data1 <- data %>%
   mutate(
+    Year = as.integer(Year),
     loc_id_final = ifelse(
       loc_id %in% unused_loc_ids,
       as.integer(transfer_map[as.character(loc_id)]),
       loc_id
     )
   ) %>%
-  group_by(loc_id_final) %>%
+  group_by(loc_id_final, Year) %>%
   summarise(
     crime = sum(crime, na.rm = TRUE),
     .groups = "drop"
-  ) %>%
-  left_join(
-    loc_data_all_df %>%
-      select(loc_id, Longitude, Latitude) %>%
-      rename(loc_id_final = loc_id),
-    by = "loc_id_final"
-  ) %>%
-  arrange(loc_id_final)
+  )
+
 
 edge_graph_01_aug <- edge_graph_01 %>%
   mutate(
     edge_id = row_number(),
     data_after = loc_id
-  ) %>%
-  left_join(
-    data1 %>% select(loc_id_final, crime),
-    by = c("data_after" = "loc_id_final")
-  ) %>%
-  mutate(crime = replace_na(crime, 0L))
-
+  )
 
 step_size <- 0.05
 
@@ -310,42 +309,19 @@ ips <- make_ips(
   step = step_size
 )
 
-crime_map <- edge_graph_01_aug %>%
-  sf::st_drop_geometry() %>%
-  select(data_after, crime) %>%
-  group_by(data_after) %>%
-  summarise(
-    crime = if (n_distinct(crime, na.rm = TRUE) <= 1) {
-      dplyr::first(na.omit(crime))
-    } else {
-      max(crime, na.rm = TRUE)
-    },
-    .groups = "drop"
-  )
-
-ips_one <- ips %>%
-  mutate(block_orig = .block) %>%
-  left_join(
-    crime_map,
-    by = c("block_orig" = "data_after")
-  ) %>%
-  mutate(crime = tidyr::replace_na(crime, 0)) %>%
-  select(-block_orig)
-
 block_ids <- sort(unique(ips$.block))
 n_block <- length(block_ids)
 
-y_df <- ips_one %>%
-  arrange(.block) %>%
-  group_by(.block) %>%
-  summarise(
-    y = first(crime),
-    .groups = "drop"
-  )
+block_map <- tibble(
+  loc_id_final = block_ids,
+  block_base = seq_len(n_block)
+)
 
-y <- y_df %>%
-  arrange(.block) %>%
-  pull(y)
+ips <- ips %>%
+  mutate(loc_id_final = .block) %>%
+  left_join(block_map, by = "loc_id_final") %>%
+  mutate(.block = block_base) %>%
+  select(-block_base)
 
 pte_ips <- as.matrix(
   cbind(
@@ -413,12 +389,6 @@ for (key in key_list) {
           message("No data found for ", key, " = ", value, " ... skipping")
           next
         }
-        
-        cov_sf <- st_as_sf(
-          as.data.frame(loc_cov),
-          coords = c(1, 2),
-          crs = 4326
-        )
         
         data_cov <- check_unique_loc2pte(graph, loc_cov)
         
@@ -502,18 +472,35 @@ covariate_names <- names(covariate_store)
 covariate_df <- as_tibble(covariate_store)
 ips_cov <- bind_cols(ips, covariate_df)
 
-model_years <- 2023:2025
-
 ips_final <- purrr::map_dfr(
   model_years,
   function(yy) {
+    r <- match(yy, model_years)
     ips_cov %>%
       mutate(
         Year = yy,
-        rep = as.integer(factor(yy, levels = model_years))
+        rep = r,
+        .block = .block + n_block * (r - 1L)
       )
   }
 )
+
+
+y_df <- tidyr::expand_grid(
+  Year = model_years,
+  loc_id_final = block_ids
+) %>%
+  left_join(data1, by = c("loc_id_final", "Year")) %>%
+  left_join(block_map, by = "loc_id_final") %>%
+  mutate(
+    crime = tidyr::replace_na(crime, 0L),
+    rep = match(Year, model_years),
+    .block = block_base + n_block * (rep - 1L)
+  ) %>%
+  arrange(.block)
+
+y <- y_df$crime
+
 
 p_sigma <- 0.01
 p_range <- 0.01
@@ -542,7 +529,7 @@ rspde_model <- rspde.metric_graph(
 
 agg <- bru_mapper_aggregate(
   rescale = FALSE,
-  n_block = n_block,
+  n_block = n_block * length(model_years),
   type = "logsumexp"
 )
 
