@@ -58,6 +58,7 @@ library(sf)
 library(osmdata)
 library(dplyr)
 library(MetricGraph)
+library(ggplot2)
 
 uk <- ne_states(country = "united kingdom", returnclass = "sf")
 london <- uk[uk$region == "Greater London", ]
