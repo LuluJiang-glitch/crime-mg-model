@@ -1,18 +1,23 @@
 # Spatial model for City of London crime data, 2023-2025.
 
-code_dir <- "~/Desktop/Crime/code_final"
-base_dir <- "~/Desktop/Crime/code_final"
+file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+if (length(file_arg) > 0) {
+  base_dir <- dirname(normalizePath(sub("^--file=", "", file_arg[1])))
+} else {
+  base_dir <- normalizePath(getwd())
+}
+
+# base_dir <- "~/Desktop/Crime/L"
+setwd(base_dir)
 prepare_dir <- file.path(base_dir, "RData", "Prepare")
 spatial_dir <- file.path(base_dir, "RData", "Spatial")
 mg_dir <- file.path(base_dir, "RData", "MG")
 point_dir <- file.path(base_dir, "RData", "Point")
 for (d in c(prepare_dir, spatial_dir, mg_dir, point_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
-
 packages <- c("tidyverse", "rnaturalearth", "rnaturalearthdata", "ggplot2", "sf", "osmdata", "dplyr", "readr", "rSPDE", "MetricGraph", "fmesher", "INLA", "tibble", "tidyr", "inlabru", "units", "deldir", "purrr", "sp", "fields", "FNN")
 invisible(lapply(packages, library, character.only = TRUE))
-
 source("~/Desktop/Crime/code_final/metric_graph.R")
-source(file.path(code_dir, "Function_Model.R"))
+source(file.path(base_dir, "Function_Model.R"))
 
 Region <- "City"
 crime_type <- "Theft from the person"
@@ -21,8 +26,6 @@ crime_type <- "Theft from the person"
 # "Burglary", "Shoplifting", "Vehicle crime"
 
 nsub2 <- 5L
-
-load(file.path(prepare_dir, "01_crime_yearly_data_all.RData"))
 uk <- ne_states(country = "united kingdom", returnclass = "sf")
 london <- uk[uk$region == "Greater London", ]
 boundary <- st_transform(
@@ -33,21 +36,11 @@ boundary <- st_transform(
 boundary_sf <- st_as_sf(boundary)
 crs <- sf::st_crs(boundary_sf)
 
-data_all_raw <- yearly_data %>%
+load(file.path(prepare_dir, "01_data_city.RData"))
+data_all_raw <- data_city %>%
   filter(`Crime type` == crime_type) %>%
-  filter(Year %in% c("2023", "2024", "2025")) %>%
-  st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326) %>%
-  filter(rowSums(st_within(geometry, boundary, sparse = FALSE)) > 0) %>%
-  mutate(
-    Longitude = st_coordinates(.)[, 1],
-    Latitude  = st_coordinates(.)[, 2],
-    Year = as.numeric(Year)
-  ) %>%
   group_by(Longitude, Latitude, Year) %>%
-  summarise(
-    crime = sum(count),
-    .groups = "drop"
-  ) %>%
+  summarise(crime = sum(count), .groups = "drop") %>%
   st_drop_geometry()
 
 loc_data_all_original <- data_all_raw %>%
@@ -148,13 +141,11 @@ loc_data_all_map <- loc_data_all_df %>%
 
 bb <- st_bbox(boundary_m)
 rw <- c(bb["xmin"], bb["xmax"], bb["ymin"], bb["ymax"])
-
 v <- deldir(
   loc_data_all_m[, 1],
   loc_data_all_m[, 2],
   rw = rw
 )
-
 tiles <- tile.list(v)
 
 V_polys <- lapply(seq_along(tiles), function(i) {
@@ -173,13 +164,13 @@ V_sf <- st_sf(
   st_intersection(st_make_valid(boundary_m)) %>%
   st_make_valid()
 
-mesh <- inla.mesh.2d(
+mesh <- fmesher::fm_mesh_2d_inla(
   boundary = inla.sp2segment(as_Spatial(boundary_m)),
   max.edge = c(100, 500),
   cutoff   = 80,
   offset   = c(100, 300)
 )
-# plot(mesh)
+plot(mesh)
 
 fm_crs(mesh) <- st_crs(V_sf)
 V_sf <- V_sf %>%
@@ -554,5 +545,5 @@ fit <- bru(
 )
 
 summary(fit)
-save(fit, file = file.path(spatial_dir, paste0("fit_", crime_type, "_nsub", nsub2, ".RData")))
+save(fit, file = file.path(spatial_dir, paste0("fit_", crime_type, ".RData")))
 message("Spatial model saved in: ", spatial_dir)
