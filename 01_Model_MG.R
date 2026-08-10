@@ -1,54 +1,56 @@
 # MG model for City of London crime data, 2023-2025.
 
-code_dir <- "~/Desktop/Crime/code_final"
-base_dir <- "~/Desktop/Crime/code_final"
+file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+if (length(file_arg) > 0) {
+  base_dir <- dirname(normalizePath(sub("^--file=", "", file_arg[1])))
+} else {
+  base_dir <- normalizePath(getwd())
+}
+
+# base_dir <- "/Users/JIANL0A/Desktop/Crime/L"
+setwd(base_dir)
 prepare_dir <- file.path(base_dir, "RData", "Prepare")
 spatial_dir <- file.path(base_dir, "RData", "Spatial")
 mg_dir <- file.path(base_dir, "RData", "MG")
 point_dir <- file.path(base_dir, "RData", "Point")
 for (d in c(prepare_dir, spatial_dir, mg_dir, point_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
-
-packages <- c("tidyverse", "rnaturalearth", "rnaturalearthdata", "ggplot2", "sf", "osmdata", "dplyr", "readr", "rSPDE", "MetricGraph", "fmesher", "INLA", "tibble", "tidyr", "inlabru", "units", "deldir", "purrr", "sp", "fields", "FNN")
+packages <- c("tidyverse", "rnaturalearth", "rnaturalearthdata", "ggplot2", "sf", "osmdata", "dplyr", "readr", "MetricGraph", "fmesher", "INLA", "tibble", "tidyr", "inlabru", "units", "deldir", "purrr", "sp", "fields", "FNN")
 invisible(lapply(packages, library, character.only = TRUE))
-
-source("~/Desktop/Crime/code_final/metric_graph.R")
-source(file.path(code_dir, "Function_Model.R"))
+source(file.path(base_dir, "metric_graph.R"))
+source(file.path(base_dir, "Function_Model.R"))
 
 Region <- "City"
-crime_type <- "Robbery"
-model_years <- 2023:2025
+crime_type <- "Theft from the person"
 # "Theft from the person", "Robbery", "Drugs", "Bicycle theft"
 # "Anti-social behaviour", "Criminal damage and arson", "Violence and sexual offences", "Vehicle crime"
 # "Burglary", "Shoplifting"
+model_years <- 2023:2025
+large_graph_file <- file.path(prepare_dir, "02_graph_City_L100.RData")
+step_size <- 0.05
+graph_crs <- 4326
+metric_crs <- 27700
 
-
-# Load data.
-load(file.path(prepare_dir, "01_crime_yearly_data_all.RData"))
+# create boundary
 uk <- ne_states(country = "united kingdom", returnclass = "sf")
 london <- uk[uk$region == "Greater London", ]
 boundary <- st_transform(
   london[london$name %in% c(Region), ],
-  crs = 4326
+  crs = graph_crs
 ) %>%
   st_union()
-boundary_sf <- st_as_sf(boundary)
-crs <- sf::st_crs(boundary_sf)
+boundary_sf <- st_as_sf(boundary) %>%
+  st_make_valid()
 
-# Longitude Latitude  Year crime
-data_all_raw <- yearly_data %>%
+
+load(file.path(prepare_dir, "01_data_city.RData"))
+data_all_raw <- data_city %>%
   filter(`Crime type` == crime_type) %>%
-  filter(Year %in% as.character(model_years)) %>%
-  st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326) %>%
-  filter(rowSums(st_within(geometry, boundary, sparse = FALSE)) > 0) %>%
-  mutate(
-    Longitude = st_coordinates(.)[, 1],
-    Latitude = st_coordinates(.)[, 2],
-    Year = as.numeric(Year)
-  ) %>%
   group_by(Longitude, Latitude, Year) %>%
   summarise(crime = sum(count), .groups = "drop") %>%
   st_drop_geometry()
 
+
+# Assign ID to every original coordinate.
 # Longitude Latitude original_loc_id
 loc_data_all_original <- data_all_raw %>%
   distinct(Longitude, Latitude) %>%
@@ -60,8 +62,8 @@ merge_res <- merge_points_within_distance(
   loc_df = loc_data_all_original %>%
     select(Longitude, Latitude),
   dist_m = 30,
-  crs_longlat = 4326,
-  crs_meter = 27700
+  crs_longlat = graph_crs,
+  crs_meter = metric_crs
 )
 
 message(
@@ -75,6 +77,7 @@ message(
 )
 
 
+# Map original coordinates to their merged locations.
 # original_loc_id Longitude_original Latitude_original loc_id Longitude Latitude
 loc_cluster_map <- loc_data_all_original %>%
   select(
@@ -103,9 +106,12 @@ loc_data_all_df <- merge_res$loc_merged_df %>%
   ) %>%
   arrange(loc_id)
 
+# Coordinates used to construct the Voronoi partition.
 # Longitude Latitude (merged)
 loc_data_all <- loc_data_all_df %>% select(Longitude, Latitude)
 
+
+# Re-aggregate crime counts after merging nearby released locations.
 # loc_id Longitude Latitude  Year crime
 data_all <- data_all_raw %>%
   left_join(
@@ -142,9 +148,10 @@ colnames(loc_data_df) <- c("Longitude", "Latitude")
 
 
 
-load("~/Desktop/Crime/code_final/RData/Prepare/02_graph_City.RData")
-
-bb <- st_bbox(boundary)
+# load graph
+load(large_graph_file)
+graph$clear_observations()
+bb <- st_bbox(boundary_sf)
 rw <- c(bb["xmin"], bb["xmax"], bb["ymin"], bb["ymax"])
 
 v <- deldir(
@@ -163,53 +170,109 @@ dirsg <- lapply(seq_len(nrow(v$dirsgs)), function(i) {
 })
 
 edge_Voronoi <- do.call(sf::st_sfc, dirsg)
-sf::st_crs(edge_Voronoi) <- crs
+sf::st_crs(edge_Voronoi) <- graph_crs
 edge_Voronoi <- sf::st_sf(geometry = edge_Voronoi)
+edge_MG <- graph$get_edges(format = "sf")
+s2_old <- sf::sf_use_s2()
+sf::sf_use_s2(FALSE)
 
-edge_MG <- sf::st_transform(
-  graph$get_edges(format = "sf"),
-  crs
+boundary_pts <- suppressWarnings(
+  st_intersection(
+    st_geometry(edge_MG),
+    st_boundary(st_geometry(boundary_sf))
+  )
 )
 
+boundary_pts <- st_sf(geometry = boundary_pts)
+boundary_pts <- suppressWarnings(
+  st_collection_extract(boundary_pts, "POINT")
+)
+boundary_pts <- suppressWarnings(
+  st_cast(boundary_pts, "POINT")
+)
 
-# intersection points
-intsec_file <- file.path(prepare_dir, paste0("03_intsec_", Region, "_", crime_type, ".RData"))
-if (file.exists(intsec_file)) {
-  load(intsec_file)
-  message("Loaded existing intsec_pts: ", intsec_file)
-} else {
-  intsec_pts <- sf::st_intersection(edge_Voronoi, edge_MG)
-  intsec_pts <- intsec_pts[sf::st_geometry_type(intsec_pts) == "POINT", ]
-  
-  coords <- sf::st_coordinates(intsec_pts)[, c("X", "Y")]
-  intsec_pts <- data.frame(
-    x = coords[, 1],
-    y = coords[, 2]
+intsec_pts <- suppressWarnings(
+  st_intersection(
+    st_geometry(edge_Voronoi),
+    st_geometry(edge_MG)
   )
-  
-  intsec_pts <- sf::st_as_sf(
-    intsec_pts,
-    coords = c("x", "y"),
-    crs = crs
-  )
-  
-  save(intsec_pts, file = intsec_file)
-  message("Saved new intsec_pts: ", intsec_file)
-}
+)
+
+intsec_pts <- st_sf(geometry = intsec_pts)
+intsec_pts <- suppressWarnings(
+  st_collection_extract(intsec_pts, "POINT")
+)
+intsec_pts <- suppressWarnings(
+  st_cast(intsec_pts, "POINT")
+)
+
+# Keep only Voronoi intersections inside the original City boundary.
+keep_intsec <- lengths(
+  st_intersects(intsec_pts, boundary_sf)
+) > 0L
+
+intsec_pts <- intsec_pts[
+  keep_intsec,
+  ,
+  drop = FALSE
+]
+
+
+
+# Combine intsec points
+intsec_pts <- dplyr::bind_rows(
+  boundary_pts,
+  intsec_pts
+)
+
+coords <- st_coordinates(intsec_pts)[, c("X", "Y"), drop = FALSE]
+point_key <- paste(
+  round(coords[, 1], 8),
+  round(coords[, 2], 8),
+  sep = ":"
+)
+intsec_pts <- intsec_pts[!duplicated(point_key), , drop = FALSE]
+coords <- st_coordinates(intsec_pts)
+intsec_pts$x <- coords[, "X"]
+intsec_pts$y <- coords[, "Y"]
 
 graph$add_observations(
   data = intsec_pts,
   coord_x = "x",
   coord_y = "y",
-  data_coords = "spatial"
+  data_coords = "spatial",
+  verbose = 0
 )
 
-graph$observation_to_vertex(mesh_warning = TRUE)
+graph$observation_to_vertex(mesh_warning = FALSE)
+graph$clear_observations()
+edge_graph_all <- graph$get_edges(format = "sf") %>% mutate(edge_id = row_number())
+
+inside_edge <- lengths(
+  st_covered_by(
+    st_geometry(edge_graph_all),
+    st_geometry(boundary_sf)
+  )
+) > 0L
+
+edge_graph_01 <- edge_graph_all[
+  inside_edge,
+  ,
+  drop = FALSE
+]
+
+sf::sf_use_s2(s2_old)
+
+message(
+  "Large graph edges used by SPDE: ", nrow(edge_graph_all),
+  "; edges used for integration inside original boundary: ",
+  nrow(edge_graph_01)
+)
 
 
 
-edge_graph_01 <- graph$get_edges(format = "sf")
 
+# Assign every graph edge to the nearest merged crime location.
 mid_points <- t(
   vapply(
     edge_graph_01$geometry,
@@ -236,7 +299,6 @@ edge_graph_01$Latitude <- loc_data_all_df$Latitude[nn_edges$nn.index[, 1]]
 used_loc_ids <- sort(unique(edge_graph_01$loc_id))
 all_loc_ids <- loc_data_all_df$loc_id
 unused_loc_ids <- setdiff(all_loc_ids, used_loc_ids)
-# unused_loc_ids=0
 if (length(unused_loc_ids) == 0) {
   message("All merged coordinate points are already used by graph edges; no reassignment is needed.")
   transfer_map <- integer(0)
@@ -266,18 +328,8 @@ if (length(unused_loc_ids) == 0) {
 loc_data_all_map <- loc_data_all_df %>% distinct(Longitude, Latitude, loc_id)
 
 
-# if (!("loc_id" %in% names(data_all))) {
-#   data_all <- data_all %>%
-#     left_join(loc_data_all_map, by = c("Longitude", "Latitude"))
-# }
-# 
-# if (!("loc_id" %in% names(data))) {
-#   data <- data %>%
-#     left_join(loc_data_all_map, by = c("Longitude", "Latitude"))
-# }
 
-
-
+# Add counts from unused locations to nearest location
 # loc_id_final  Year crime
 data1 <- data %>%
   mutate(
@@ -294,20 +346,157 @@ data1 <- data %>%
     .groups = "drop"
   )
 
+edge_graph_01_aug <- edge_graph_01 %>% mutate(data_after = loc_id)
 
-edge_graph_01_aug <- edge_graph_01 %>%
-  mutate(
-    edge_id = row_number(),
-    data_after = loc_id
-  )
-
-step_size <- 0.05
-
-ips <- make_ips(
-  edge_graph_01_aug,
-  graph,
-  step = step_size
+block_map <- match(
+  edge_graph_01_aug$data_after,
+  sort(unique(edge_graph_01_aug$data_after))
 )
+
+idx_all <- integer(0)
+u_all <- numeric(0)
+w_all <- numeric(0)
+b_all <- integer(0)
+
+for (i in seq_len(nrow(edge_graph_01_aug))) {
+  
+  rr <- simpson_u_weight(
+    edge_graph_01_aug$.edge_lengths[i],
+    step = step_size
+  )
+  
+  m <- length(rr$u)
+  
+  idx_all <- c(
+    idx_all,
+    rep(edge_graph_01_aug$edge_id[i], m)
+  )
+  
+  u_all <- c(u_all, rr$u)
+  w_all <- c(w_all, rr$w)
+  b_all <- c(b_all, rep(block_map[i], m))
+}
+
+ips <- tibble(
+  x = as_MGG(
+    cbind(idx_all, u_all),
+    graph = graph
+  ),
+  weight = w_all,
+  .block = b_all
+)
+
+
+# plot ips
+# ips_plot <- data.frame(
+#   edge_number = ips$x$index,
+#   distance_on_edge = ips$x$where[, 2],
+#   ips_id = seq_len(nrow(ips))
+# )
+# 
+# graph$clear_observations()
+# 
+# graph$add_observations(
+#   data = ips_plot,
+#   normalized = TRUE
+# )
+# 
+# graph$plot(
+#   data = "ips_id",
+#   type = "ggplot",
+#   vertex_size = 0,
+#   data_size = 0.4
+# ) +
+#   geom_sf(
+#     data = boundary_sf,
+#     fill = NA,
+#     colour = "red",
+#     linewidth = 0.7
+#   ) +
+#   geom_sf(
+#     data = voronoi_in_boundary,
+#     colour = "grey50",
+#     linewidth = 0.3,
+#     linetype = "22"
+#   ) +
+#   geom_sf(
+#     data = loc_points_sf,
+#     colour = "blue",
+#     size = 0.8
+#   ) +
+#   ggtitle("Distribution of Simpson integration points") +
+#   theme_bw()
+
+
+loc_points_sf <- st_as_sf(
+  loc_data_all_df,
+  coords = c("Longitude", "Latitude"),
+  crs = graph_crs
+)
+
+voronoi_in_boundary_raw <- suppressWarnings(
+  st_intersection(
+    st_geometry(edge_Voronoi),
+    st_geometry(boundary_sf)
+  )
+)
+
+voronoi_in_boundary <- st_sf(geometry = voronoi_in_boundary_raw)
+voronoi_geom_type <- as.character(st_geometry_type(voronoi_in_boundary))
+voronoi_in_boundary <- voronoi_in_boundary[
+  voronoi_geom_type %in% c("LINESTRING", "MULTILINESTRING"),
+  ,
+  drop = FALSE
+]
+
+
+# ggplot() +
+  # geom_sf(data = edge_graph_all, colour = "grey80", linewidth = 0.25) +
+  # geom_sf(data = voronoi_in_boundary, colour = "grey55", linewidth = 0.25, linetype = "22") +
+  # geom_sf(data = edge_graph_01, colour = "#0072B2", linewidth = 0.5) +
+  # geom_sf(data = boundary_sf, fill = NA, colour = "red", linewidth = 0.8) +
+  # geom_sf(data = loc_points_sf, colour = "black", size = 0.7, alpha = 0.65) +
+  # coord_sf(expand = FALSE) +
+  # theme_bw() +
+  # labs(
+  #   title = paste0("MG integration domain for ", Region),
+  #   subtitle = paste0(
+  #     "Grey = enlarged graph used by SPDE; blue = integration-domain edges; ",
+  #     "red = original boundary"
+  #   ),
+  #   x = NULL,
+  #   y = NULL,
+  #   caption = "Black points are merged released crime locations; dashed grey lines are Voronoi boundaries inside the original boundary."
+  # )
+
+
+# plot ips corresponding to y block
+# plot_region_df <- edge_graph_01 %>%
+#   rename(loc_id_final = loc_id) %>%
+#   left_join(
+#     y_df %>% select(Year, loc_id_final, crime),
+#     by = "loc_id_final"
+#   ) %>%
+#   mutate(
+#     log_crime = log1p(crime)
+#   )
+# 
+# ggplot() +
+#   geom_sf(
+#     data = plot_region_df,
+#     aes(colour = log_crime),
+#     linewidth = 0.8
+#   ) +
+#   geom_sf(
+#     data = boundary_sf,
+#     fill = NA,
+#     colour = "black",
+#     linewidth = 0.5
+#   ) +
+#   facet_wrap(~ Year) +
+#   scale_colour_viridis_c(name = "log1p(crime)") +
+#   theme_bw()
+
 
 block_ids <- sort(unique(ips$.block))
 n_block <- length(block_ids)
@@ -330,6 +519,24 @@ pte_ips <- as.matrix(
   )
 )
 
+pte_key <- paste(
+  pte_ips[, 1],
+  formatC(pte_ips[, 2], digits = 17, format = "fg", flag = "#"),
+  sep = ":"
+)
+unique_pte <- !duplicated(pte_key)
+ips$spde_loc_id <- match(pte_key, unique(pte_key))
+
+spde_loc_data <- data.frame(
+  spde_loc_id = seq_len(sum(unique_pte)),
+  edge_number = as.integer(pte_ips[unique_pte, 1]),
+  distance_on_edge = pte_ips[unique_pte, 2]
+)
+
+
+
+
+# covariates.
 key_list <- c("amenity", "highway", "man_made", "railway", "shop")
 
 value_list <- list(
@@ -435,6 +642,9 @@ for (key in key_list) {
   }
 }
 
+
+
+# Load the graph distances and transform d to exp(-d).
 covariate_store <- list()
 
 for (key in key_list) {
@@ -472,6 +682,63 @@ covariate_names <- names(covariate_store)
 covariate_df <- as_tibble(covariate_store)
 ips_cov <- bind_cols(ips, covariate_df)
 
+
+# ips_plot <- data.frame(
+#   edge_number = ips$x$index,
+#   distance_on_edge = ips$x$where[, 2],
+#   ips_cov[, covariate_names]
+# )
+# 
+# graph$clear_observations()
+# 
+# graph$add_observations(
+#   data = ips_plot,
+#   normalized = TRUE
+# )
+# 
+# for (cov in covariate_names) {
+# 
+#   path_loc <- file.path(
+#     prepare_dir,
+#     "cov/loc",
+#     paste0(cov, "_loc.RData")
+#   )
+# 
+#   load(path_loc)   # load loc_cov
+# 
+#   loc_cov_df <- data.frame(
+#     Longitude = loc_cov[, 1],
+#     Latitude = loc_cov[, 2]
+#   )
+# 
+#   p <- graph$plot(
+#     data = cov,
+#     type = "ggplot",
+#     vertex_size = 0,
+#     data_size = 1
+#   ) +
+#     geom_sf(
+#       data = boundary_sf,
+#       fill = NA,
+#       colour = "red",
+#       linewidth = 0.6
+#     ) +
+#     geom_point(
+#       data = loc_cov_df,
+#       aes(x = Longitude, y = Latitude),
+#       colour = "blue",
+#       size = 1
+#     ) +
+#     ggtitle(cov) +
+#     theme_bw()
+# 
+#   print(p)
+# }
+
+
+
+
+# Each year uses the same ips but a distinct block index.
 ips_final <- purrr::map_dfr(
   model_years,
   function(yy) {
@@ -486,6 +753,7 @@ ips_final <- purrr::map_dfr(
 )
 
 
+# Create a year-block response table; unobserved counts are zero.
 y_df <- tidyr::expand_grid(
   Year = model_years,
   loc_id_final = block_ids
@@ -502,6 +770,9 @@ y_df <- tidyr::expand_grid(
 y <- y_df$crime
 
 
+
+
+# Log-Gaussian priors for the marginal standard deviation and range.
 p_sigma <- 0.01
 p_range <- 0.01
 
@@ -514,18 +785,42 @@ sd_sigma <- (log(5) - mu_sigma) / qnorm(1 - p_sigma)
 mu_range <- log(range_median)
 sd_range <- (mu_range - log(0.01)) / qnorm(1 - p_range)
 
-rspde_model <- rspde.metric_graph(
-  graph,
-  nu = 0.5,
-  parameterization = "matern",
-  start.lstd.dev = mu_sigma,
-  start.lrange = mu_range,
-  theta.prior.mean = c(mu_sigma, mu_range),
-  theta.prior.prec = diag(c(
-    1 / sd_sigma^2,
-    1 / sd_range^2
-  ))
+graph$clear_observations()
+graph$add_observations(
+  data = spde_loc_data,
+  normalized = TRUE
 )
+
+# nu = 0.5, alpha = 1.
+spde_model <- graph_spde(
+  graph_object = graph,
+  alpha = 1,
+  stationary_endpoints = "all",
+  parameterization = "matern",
+  start_sigma = sigma_median,
+  start_range = range_median,
+  prior_sigma = list(
+    meanlog = mu_sigma,
+    sdlog = sd_sigma
+  ),
+  prior_range = list(
+    meanlog = mu_range,
+    sdlog = sd_range
+  )
+)
+
+spde_model_data <- graph_data_spde(
+  graph_spde = spde_model,
+  loc_name = "loc",
+  drop_na = FALSE,
+  drop_all_na = FALSE
+)[["data"]]
+
+spde_loc_ids <- spde_model_data$spde_loc_id
+spde_loc_matrix <- spde_model_data$loc
+spde_match <- match(ips_final$spde_loc_id, spde_loc_ids)
+ips_final_data <- as.list(ips_final)
+ips_final_data$loc <- spde_loc_matrix[spde_match, , drop = FALSE]
 
 agg <- bru_mapper_aggregate(
   rescale = FALSE,
@@ -559,7 +854,7 @@ lik <- bru_obs(
   formula = formula,
   response_data = data.frame(y = y),
   family = "poisson",
-  data = ips_final,
+  data = ips_final_data,
   allow_combine = TRUE
 )
 
@@ -569,12 +864,12 @@ if (length(covariate_terms) > 0) {
   cmp_str <- paste(
     "y ~ Intercept(1) +",
     paste(covariate_terms, collapse = " + "),
-    "+ spde(x, model = rspde_model, mapper = bru_mapper(graph), replicate = rep)"
+    "+ spde(loc, model = spde_model, replicate = rep)"
   )
 } else {
   cmp_str <- paste(
     "y ~ Intercept(1) +",
-    "spde(x, model = rspde_model, mapper = bru_mapper(graph), replicate = rep)"
+    "spde(loc, model = spde_model, replicate = rep)"
   )
 }
 
@@ -604,13 +899,13 @@ fit <- bru(
 
 summary(fit)
 
-summary(
-  rspde.result(
-    fit,
-    "spde",
-    rspde_model
-  )
+spde_result <- spde_metric_graph_result(
+  fit,
+  "spde",
+  spde_model
 )
 
-save(fit, file = file.path(mg_dir, paste0("fit_", crime_type, "_M30.RData")))
+summary(spde_result)
+
+save(fit, file = file.path(mg_dir, paste0("fit_", crime_type, ".RData")))
 message("MG model saved in: ", mg_dir)
