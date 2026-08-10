@@ -7,7 +7,18 @@ if (length(file_arg) > 0) {
 
 setwd(base_dir)
 prepare_dir <- file.path(base_dir, "RData", "Prepare")
-source(file.path(base_dir, "metric_graph.R"))
+
+
+
+metric_graph_file <- file.path(base_dir, "metric_graph.R")
+if (!file.exists(metric_graph_file)) {
+  download.file(
+    "https://raw.githubusercontent.com/karinalilleborge/LinesMetricGraph/main/metric_graph.R",
+    destfile = metric_graph_file,
+    mode = "wb"
+  )
+}
+source(metric_graph_file)
 
 # Crime Data 01_data_city.RData
 # library(tidyverse)
