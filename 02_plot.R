@@ -2,7 +2,6 @@ library(dplyr)
 library(tidyr)
 library(ggplot2)
 library(grid)
-library(INLA)
 
 file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
 if (length(file_arg) > 0) {
@@ -94,12 +93,12 @@ get_result <- function(file, model, ct) {
   }
   
   
-  lhood <- fit$bru_info$lhoods[[1]]
-  response_name <- lhood$response
-  y <- as.numeric(lhood$response_data[[response_name]])
+  lhood <- fit$bru_info$model$lhoods[[1]]
+  y <- as.numeric(lhood$response_data[[lhood$response]])
   
   loo <- inla.group.cv(result = fit)
-  loo_pred <- exp(loo$mean + 0.5 * loo$sd^2)
+  # loo_pred <- exp(loo$mean + 0.5 * loo$sd^2)
+  loo_pred <- exp(loo$mean)
   loo_rmse <- sqrt(mean((y - loo_pred)^2))
   loo_mae <- sqrt(mean(abs(y - loo_pred)))
   log_error <- mean(abs(log1p(y) - log1p(loo_pred)))
@@ -108,9 +107,9 @@ get_result <- function(file, model, ct) {
     Crime_Type = ct,
     Model = model,
     # NlogLik = if (!is.null(fit$mlik)) -fit$mlik[1] else NA_real_,
-    # RMSE = loo_rmse,
+    RMSE = loo_rmse,
     # MAE = loo_mae,
-    LE = log_error,
+    # LE = log_error,
     DIC = if (!is.null(fit$dic$dic)) fit$dic$dic else NA_real_,
     WAIC = if (!is.null(fit$waic$waic)) fit$waic$waic else NA_real_,
     LOO = -mean(log(loo$cv))
@@ -308,7 +307,7 @@ plot_metrics <- all_metrics %>%
     )
   ) %>%
   pivot_longer(
-    cols = c(DIC, WAIC, LOO, LE),
+    cols = c(DIC, WAIC, LOO, RMSE),
     names_to = "Metric",
     values_to = "Value"
   )
