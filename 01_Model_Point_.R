@@ -1,21 +1,24 @@
 # Point model for City of London crime data, 2023-2025.
+file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+if (length(file_arg) > 0) {
+  base_dir <- dirname(normalizePath(sub("^--file=", "", file_arg[1])))
+} else {
+  base_dir <- normalizePath(getwd())
+}
 
-code_dir <- "~/Desktop/Crime/code_final"
-base_dir <- "~/Desktop/Crime/code_final"
+# base_dir <- "~/Desktop/Crime/L"
 prepare_dir <- file.path(base_dir, "RData", "Prepare")
 spatial_dir <- file.path(base_dir, "RData", "Spatial")
 mg_dir <- file.path(base_dir, "RData", "MG")
 point_dir <- file.path(base_dir, "RData", "Point")
 for (d in c(prepare_dir, spatial_dir, mg_dir, point_dir)) dir.create(d, recursive = TRUE, showWarnings = FALSE)
-
 packages <- c("tidyverse", "rnaturalearth", "rnaturalearthdata", "ggplot2", "sf", "osmdata", "dplyr", "readr", "rSPDE", "MetricGraph", "fmesher", "INLA", "tibble", "tidyr", "inlabru", "units", "deldir", "purrr", "sp", "fields", "FNN")
 invisible(lapply(packages, library, character.only = TRUE))
-
 source("~/Desktop/Crime/code_final/metric_graph.R")
-source(file.path(code_dir, "Function_Model.R"))
+source(file.path(base_dir, "Function_Model.R"))
 
 name <- Region <- "City"
-crime_type <- "Bicycle theft"
+crime_type <- "Theft from the person"
 # "Theft from the person", "Robbery", "Drugs", "Bicycle theft"
 # "Anti-social behaviour", "Criminal damage and arson", "Violence and sexual offences", "Vehicle crime"
 # "Burglary", "Shoplifting"
@@ -35,21 +38,12 @@ boundary_ll <- st_as_sf(boundary_ll)
 boundary <- st_transform(boundary_ll, 27700)
 boundary <- st_make_valid(boundary)
 
-load(file.path(prepare_dir, "01_crime_yearly_data_all.RData"))
 
-data_all_raw <- yearly_data %>%
+load(file.path(prepare_dir, "01_data_city.RData"))
+data_all_raw <- data_city %>%
   filter(`Crime type` == crime_type) %>%
-  filter(Year %in% c("2023", "2024", "2025")) %>%
-  mutate(Year = as.numeric(Year)) %>%
-  filter(Year %in% 2023:2025) %>%
-  st_as_sf(coords = c("Longitude", "Latitude"), crs = 4326, remove = FALSE) %>%
-  filter(rowSums(st_within(geometry, boundary_ll, sparse = FALSE)) > 0) %>%
-  mutate(
-    Longitude = st_coordinates(.)[, 1],
-    Latitude = st_coordinates(.)[, 2]
-  ) %>%
   group_by(Longitude, Latitude, Year) %>%
-  summarise(crime = sum(count, na.rm = TRUE), .groups = "drop") %>%
+  summarise(crime = sum(count), .groups = "drop") %>%
   st_drop_geometry()
 
 loc_data_all_original <- data_all_raw %>%
