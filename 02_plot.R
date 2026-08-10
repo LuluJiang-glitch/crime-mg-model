@@ -3,7 +3,15 @@ library(tidyr)
 library(ggplot2)
 library(grid)
 
-base_dir <- "~/Desktop/Crime/code_final"
+file_arg <- grep("^--file=", commandArgs(trailingOnly = FALSE), value = TRUE)
+if (length(file_arg) > 0) {
+  base_dir <- dirname(normalizePath(sub("^--file=", "", file_arg[1])))
+} else {
+  base_dir <- normalizePath(getwd())
+}
+
+# base_dir <- "/Users/JIANL0A/Desktop/Crime/L"
+setwd(base_dir)
 path_spatial <- file.path(base_dir, "RData", "Spatial")
 path_mg <- file.path(base_dir, "RData", "MG")
 path_point <- file.path(base_dir, "RData", "Point")
@@ -84,15 +92,27 @@ get_result <- function(file, model, ct) {
       )
   }
   
-  cpo <- fit$cpo$cpo
+  
+  lhood <- fit$bru_info$lhoods[[1]]
+  response_name <- lhood$response
+  y <- as.numeric(lhood$response_data[[response_name]])
+  
+  loo <- inla.group.cv(result = fit)
+  loo_pred <- exp(loo$mean + 0.5 * loo$sd^2)
+  loo_rmse <- sqrt(mean((y - loo_pred)^2))
+  loo_mae <- sqrt(mean(abs(y - loo_pred)))
+  log_error <- mean(abs(log1p(y) - log1p(loo_pred)))
   
   metrics <- data.frame(
     Crime_Type = ct,
     Model = model,
-    NlogLik = if (!is.null(fit$mlik)) -fit$mlik[1] else NA_real_,
+    # NlogLik = if (!is.null(fit$mlik)) -fit$mlik[1] else NA_real_,
+    # RMSE = loo_rmse,
+    # MAE = loo_mae,
+    LE = log_error,
     DIC = if (!is.null(fit$dic$dic)) fit$dic$dic else NA_real_,
     WAIC = if (!is.null(fit$waic$waic)) fit$waic$waic else NA_real_,
-    LCPO = if (!is.null(cpo)) sum(-log(cpo), na.rm = TRUE) else NA_real_
+    LOO = -mean(log(loo$cv))
   )
   
   list(
@@ -108,12 +128,12 @@ for (ct in crime_types) {
   
   file_mg <- file.path(
     path_mg,
-    paste0("fit_", ct, "_M30.RData")
+    paste0("fit_", ct, ".RData")
   )
   
   file_spatial <- file.path(
     path_spatial,
-    paste0("fit_", ct, "_nsub5.RData")
+    paste0("fit_", ct, ".RData")
   )
   
   file_point <- file.path(
@@ -287,7 +307,7 @@ plot_metrics <- all_metrics %>%
     )
   ) %>%
   pivot_longer(
-    cols = c(DIC, WAIC, LCPO, NlogLik),
+    cols = c(DIC, WAIC, LOO, LE),
     names_to = "Metric",
     values_to = "Value"
   )
@@ -336,3 +356,4 @@ ggsave(
   height = 7,
   dpi = 300
 )
+
