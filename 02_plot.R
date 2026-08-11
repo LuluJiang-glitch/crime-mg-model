@@ -98,8 +98,8 @@ get_result <- function(file, model, ct) {
   y <- as.numeric(lhood$response_data[[lhood$response]])
   
   loo <- inla.group.cv(result = fit)
-  # loo_pred <- exp(loo$mean + 0.5 * loo$sd^2)
-  loo_pred <- exp(loo$mean)
+  loo_pred <- exp(loo$mean + 0.5 * loo$sd^2)
+  # loo_pred <- exp(loo$mean)
   loo_rmse <- sqrt(mean((y - loo_pred)^2))
   loo_mae <- sqrt(mean(abs(y - loo_pred)))
   log_error <- mean(abs(log1p(y) - log1p(loo_pred)))
