@@ -313,6 +313,20 @@ plot_metrics <- all_metrics %>%
     values_to = "Value"
   )
 
+
+plot_metrics <- all_metrics %>%
+  mutate(
+    Crime_Type_short = factor(
+      crime_labels[as.character(Crime_Type)],
+      levels = crime_labels[crime_types]
+    )
+  ) %>%
+  pivot_longer(
+    cols = c(DIC, WAIC, LOO),
+    names_to = "Metric",
+    values_to = "Value"
+  )
+
 p_metrics <- ggplot(
   plot_metrics,
   aes(
@@ -328,11 +342,15 @@ p_metrics <- ggplot(
   facet_wrap(
     ~ Metric,
     scales = "free_y",
-    ncol = 2
+    ncol = 3
   ) +
   theme_bw(base_size = 20) +
   theme(
-    axis.text.x = element_text(angle = 45, hjust = 1, size = 15),
+    axis.text.x = element_text(
+      angle = 45,
+      hjust = 1,
+      size = 15
+    ),
     axis.text.y = element_text(size = 16),
     strip.text = element_text(face = "bold", size = 18),
     axis.title.x = element_blank(),
@@ -353,8 +371,7 @@ p_metrics
 ggsave(
   filename = file.path(out_fig, "Model_Comparison_Metrics.png"),
   plot = p_metrics,
-  width = 13,
-  height = 7,
+  width = 16,
+  height = 6,
   dpi = 300
 )
-
