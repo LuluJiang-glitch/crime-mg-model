@@ -325,6 +325,16 @@ plot_metrics <- all_metrics %>%
     cols = c(DIC, WAIC, LOO),
     names_to = "Metric",
     values_to = "Value"
+  ) %>%
+  mutate(
+    Metric = recode(
+      Metric,
+      "LOO" = "LOO LS"
+    ),
+    Metric = factor(
+      Metric,
+      levels = c("DIC", "WAIC", "LOO LS")
+    )
   )
 
 p_metrics <- ggplot(
